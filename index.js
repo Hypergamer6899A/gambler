@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Partials, Collection } from "discord.js";
+import { Client, GatewayIntentBits, Partials } from "discord.js";
 import express from "express";
 import "dotenv/config";
 import { initializeApp, cert } from "firebase-admin/app";
@@ -33,7 +33,7 @@ const client = new Client({
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.user.setPresence({
-    activities: [{ name: "/help | LETS GO GAMBLING", type: 0 }],
+    activities: [{ name: "!g help | Simple Gambling", type: 0 }],
     status: "online",
   });
 });
@@ -47,7 +47,9 @@ client.on("interactionCreate", async (interaction) => {
       "**Available Commands:**\n" +
       "`/help` - Show this help menu\n" +
       "`!g balance` - Check your balance\n" +
-      "`!g roulette <red|black|odd|even> <amount>` - Bet on roulette"
+      "`!g roulette <red|black|odd|even> <amount>` - Bet on roulette\n" +
+      "`!g claim` - If broke, claim 100 coins every 24 hours\n" +
+      "`!g leaderboard` - Show top 5 richest players"
     );
   }
 });
@@ -60,15 +62,38 @@ client.on("messageCreate", async (message) => {
 
   const args = message.content.split(" ");
   const command = args[1]?.toLowerCase();
-
   const userRef = db.collection("users").doc(message.author.id);
   const userDoc = await userRef.get();
-  let balance = userDoc.exists ? userDoc.data().balance : 1000;
+  let userData = userDoc.exists ? userDoc.data() : { balance: 1000, lastClaim: 0 };
+  let balance = userData.balance;
 
+  // --- !g balance ---
   if (command === "balance") {
     return message.reply(`${message.author}, your balance is **${balance}**.`);
   }
 
+  // --- !g claim ---
+  if (command === "claim") {
+    if (balance > 0) {
+      return message.reply(`${message.author}, you still have coins. You can only claim when broke (0 balance).`);
+    }
+
+    const now = Date.now();
+    const lastClaim = userData.lastClaim || 0;
+    const timeDiff = now - lastClaim;
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    if (timeDiff < dayMs) {
+      const hoursLeft = Math.ceil((dayMs - timeDiff) / (1000 * 60 * 60));
+      return message.reply(`${message.author}, you can claim again in **${hoursLeft} hour(s)**.`);
+    }
+
+    balance += 100;
+    await userRef.set({ balance, lastClaim: now }, { merge: true });
+    return message.reply(`${message.author}, you claimed **$100**! New balance: **${balance}**.`);
+  }
+
+  // --- !g roulette ---
   if (command === "roulette") {
     const betType = args[2];
     const betAmount = parseInt(args[3]);
@@ -87,9 +112,7 @@ client.on("messageCreate", async (message) => {
     const spin = Math.floor(Math.random() * 36) + 1;
     const color = spin === 0 ? "green" : spin % 2 === 0 ? "black" : "red";
     const parity = spin % 2 === 0 ? "even" : "odd";
-
-    let win = false;
-    if (betType === color || betType === parity) win = true;
+    const win = betType === color || betType === parity;
 
     if (win) {
       balance += betAmount;
@@ -99,7 +122,23 @@ client.on("messageCreate", async (message) => {
       await message.reply(`${message.author}, You lost! The ball landed on **${spin} (${color})**. New balance: **${balance}**.`);
     }
 
-    await userRef.set({ balance }, { merge: true });
+    await userRef.set({ balance, lastClaim: userData.lastClaim }, { merge: true });
+  }
+
+  // --- !g leaderboard ---
+  if (command === "leaderboard") {
+    const snapshot = await db.collection("users").orderBy("balance", "desc").limit(5).get();
+    if (snapshot.empty) return message.reply("No users found in the leaderboard.");
+
+    let leaderboard = "**Top 5 Richest Players:**\n";
+    let rank = 1;
+    for (const doc of snapshot.docs) {
+      const userId = doc.id;
+      const data = doc.data();
+      leaderboard += `${rank}. <@${userId}> - **${data.balance}**.\n`;
+      rank++;
+    }
+    return message.reply(leaderboard);
   }
 });
 
