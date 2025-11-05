@@ -33,7 +33,7 @@ const client = new Client({
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.user.setPresence({
-    activities: [{ name: "!g help | Simple Gambling", type: 0 }],
+    activities: [{ name: "/help | LETS GO GAMBLING", type: 0 }],
     status: "online",
   });
 });
