@@ -1,14 +1,11 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from "discord.js";
+import { Client, GatewayIntentBits, Partials, Collection } from "discord.js";
+import express from "express";
+import "dotenv/config";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
-import express from "express";
-import dotenv from "dotenv";
-dotenv.config();
 
-// Environment variables
 const {
   TOKEN,
-  CLIENT_ID,
   GUILD_ID,
   CHANNEL_ID,
   FIREBASE_CLIENT_EMAIL,
@@ -16,7 +13,7 @@ const {
   FIREBASE_PROJECT_ID,
 } = process.env;
 
-// Firebase initialization
+// --- Firebase Setup ---
 initializeApp({
   credential: cert({
     projectId: FIREBASE_PROJECT_ID,
@@ -26,117 +23,91 @@ initializeApp({
 });
 const db = getFirestore();
 
-// Discord client
+// --- Discord Client Setup ---
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  partials: [Partials.Channel],
 });
 
-// Register /help command
-const commands = [
-  new SlashCommandBuilder().setName("help").setDescription("Show available commands and rules").toJSON(),
-];
+// --- Presence ---
+client.once("ready", () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  client.user.setPresence({
+    activities: [{ name: "!g help | Simple Gambling", type: 0 }],
+    status: "online",
+  });
+});
 
-const rest = new REST({ version: "10" }).setToken(TOKEN);
-(async () => {
-  try {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log("Slash commands registered");
-  } catch (err) {
-    console.error("Failed to register commands:", err);
-  }
-})();
-
-// Handle /help command
+// --- Slash Command: /help ---
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "help") return;
-
-  try {
+  if (interaction.commandName === "help") {
     await interaction.deferReply({ ephemeral: true });
     await interaction.editReply(
       "**Available Commands:**\n" +
-        "`/help` — show this menu\n" +
-        "`!g balance` — check your balance\n" +
-        "`!g roulette <red|black|odd|even> <amount>` — bet on roulette"
+      "`/help` - Show this help menu\n" +
+      "`!g balance` - Check your balance\n" +
+      "`!g roulette <red|black|odd|even> <amount>` - Bet on roulette"
     );
-  } catch (err) {
-    console.error("Error responding to /help:", err);
   }
 });
 
-// Utility: get or create user balance
-async function getUserBalance(userId) {
-  const ref = db.collection("users").doc(userId);
-  const snap = await ref.get();
-  if (!snap.exists) {
-    await ref.set({ balance: 1000 });
-    return 1000;
+// --- Message Commands ---
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+  if (message.channel.id !== CHANNEL_ID) return;
+  if (!message.content.startsWith("!g")) return;
+
+  const args = message.content.split(" ");
+  const command = args[1]?.toLowerCase();
+
+  const userRef = db.collection("users").doc(message.author.id);
+  const userDoc = await userRef.get();
+  let balance = userDoc.exists ? userDoc.data().balance : 1000;
+
+  if (command === "balance") {
+    return message.reply(`${message.author}, your balance is **${balance}**.`);
   }
-  return snap.data().balance;
-}
 
-// Utility: set user balance
-async function setUserBalance(userId, balance) {
-  const ref = db.collection("users").doc(userId);
-  await ref.set({ balance }, { merge: true });
-}
-
-// Handle gambling commands
-client.on("messageCreate", async (msg) => {
-  if (msg.author.bot) return;
-  if (msg.channel.id !== CHANNEL_ID) return;
-  if (!msg.content.startsWith("!g")) return;
-
-  const args = msg.content.trim().split(/\s+/);
-  const command = args[1];
-
-  try {
-    if (command === "balance") {
-      const balance = await getUserBalance(msg.author.id);
-      return msg.reply(`<@${msg.author.id}>, your balance is **${balance}**.`);
+  if (command === "roulette") {
+    const betType = args[2];
+    const betAmount = parseInt(args[3]);
+    if (!betType || isNaN(betAmount)) {
+      return message.reply(`${message.author}, usage: \`!g roulette <red|black|odd|even> <amount>\``);
+    }
+    if (betAmount <= 0 || betAmount > balance) {
+      return message.reply(`${message.author}, invalid bet amount.`);
     }
 
-    if (command === "roulette") {
-      const choice = args[2]?.toLowerCase();
-      const amount = parseInt(args[3]);
-
-      if (!["red", "black", "odd", "even"].includes(choice))
-        return msg.reply("Usage: `!g roulette <red|black|odd|even> <amount>`");
-      if (isNaN(amount) || amount <= 0) return msg.reply("Enter a valid bet amount.");
-
-      let balance = await getUserBalance(msg.author.id);
-      if (amount > balance) return msg.reply("You don't have enough money.");
-
-      const spin = Math.floor(Math.random() * 37); // 0–36
-      const redNumbers = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
-      const color = spin === 0 ? "green" : redNumbers.includes(spin) ? "red" : "black";
-      const parity = spin === 0 ? "none" : spin % 2 === 0 ? "even" : "odd";
-
-      const win = choice === color || choice === parity;
-      balance += win ? amount : -amount;
-      await setUserBalance(msg.author.id, balance);
-
-      msg.reply(
-        `<@${msg.author.id}> The wheel landed on **${color} ${spin}** — you ${win ? "**won**" : "**lost**"}!\nNew balance: **${balance}**`
-      );
-      return;
+    const outcomes = ["red", "black", "odd", "even"];
+    if (!outcomes.includes(betType)) {
+      return message.reply(`${message.author}, valid bets: red, black, odd, even.`);
     }
 
-    msg.reply("Invalid command. Type `/help` for usage.");
-  } catch (err) {
-    console.error("Message handling error:", err);
-    msg.reply("Something went wrong while processing your command.");
+    const spin = Math.floor(Math.random() * 36) + 1;
+    const color = spin === 0 ? "green" : spin % 2 === 0 ? "black" : "red";
+    const parity = spin % 2 === 0 ? "even" : "odd";
+
+    let win = false;
+    if (betType === color || betType === parity) win = true;
+
+    if (win) {
+      balance += betAmount;
+      await message.reply(`${message.author}, You won! The ball landed on **${spin} (${color})**. New balance: **${balance}**.`);
+    } else {
+      balance -= betAmount;
+      await message.reply(`${message.author}, You lost! The ball landed on **${spin} (${color})**. New balance: **${balance}**.`);
+    }
+
+    await userRef.set({ balance }, { merge: true });
   }
 });
 
-client.once("ready", () => {
-  console.log(`Bot logged in as ${client.user.tag}`);
-});
-
-client.login(TOKEN);
-
-// Dummy web server (required by Render)
+// --- Dummy HTTP Server for Render ---
 const app = express();
 app.get("/", (req, res) => res.send("Bot is running."));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
+
+// --- Login ---
+client.login(TOKEN);
