@@ -1,7 +1,7 @@
 {
   "name": "discord-gamblebot",
   "version": "1.0.0",
-  "description": "A Discord gambling bot using Firebase",
+  "description": "Discord gambling bot using Firebase and roulette game",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
   "dependencies": {
     "discord.js": "^14.16.3",
     "firebase-admin": "^12.6.0",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
   }
 }
