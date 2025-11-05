@@ -4,7 +4,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import dotenv from "dotenv";
 dotenv.config();
 
-// Env vars
+// Environment variables
 const {
   TOKEN,
   CLIENT_ID,
@@ -15,7 +15,7 @@ const {
   FIREBASE_PROJECT_ID,
 } = process.env;
 
-// Firebase init
+// Firebase initialization
 initializeApp({
   credential: cert({
     projectId: FIREBASE_PROJECT_ID,
@@ -30,42 +30,41 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-// Slash command: /help
+// Register /help slash command
 const commands = [
-  new SlashCommandBuilder()
-    .setName("help")
-    .setDescription("Show available commands and rules")
-    .toJSON(),
+  new SlashCommandBuilder().setName("help").setDescription("Show available commands and rules").toJSON(),
 ];
 
-// Deploy slash commands
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 (async () => {
   try {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
     console.log("Slash commands registered");
-  } catch (e) {
-    console.error("Command registration failed:", e);
+  } catch (err) {
+    console.error("Failed to register commands:", err);
   }
 })();
 
-// /help
+// Handle /help command
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName === "help") {
-    await interaction.reply({
-      content:
-        "**Available Commands:**\n" +
-        "`/help` - show this help menu\n" +
-        "`!g balance` - check your balance\n" +
-        "`!g roulette <red|black|odd|even> <amount>` - bet on roulette",
-      ephemeral: true,
-    });
+  if (interaction.commandName !== "help") return;
+
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    await interaction.editReply(
+      "**Available Commands:**\n" +
+        "`/help` — show this menu\n" +
+        "`!g balance` — check your balance\n" +
+        "`!g roulette <red|black|odd|even> <amount>` — bet on roulette"
+    );
+  } catch (err) {
+    console.error("Error responding to /help:", err);
   }
 });
 
-// Utility: get or create user
-async function getUser(userId) {
+// Utility: get or create user balance
+async function getUserBalance(userId) {
   const ref = db.collection("users").doc(userId);
   const snap = await ref.get();
   if (!snap.exists) {
@@ -75,55 +74,62 @@ async function getUser(userId) {
   return snap.data().balance;
 }
 
-// Handle gambling messages
+// Utility: set user balance
+async function setUserBalance(userId, balance) {
+  const ref = db.collection("users").doc(userId);
+  await ref.set({ balance }, { merge: true });
+}
+
+// Handle text-based gambling
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
   if (msg.channel.id !== CHANNEL_ID) return;
   if (!msg.content.startsWith("!g")) return;
 
   const args = msg.content.trim().split(/\s+/);
-  const sub = args[1];
+  const command = args[1];
 
-  const userRef = db.collection("users").doc(msg.author.id);
-  let balance = await getUser(msg.author.id);
-
-  // !g balance
-  if (sub === "balance") {
-    return msg.reply(`${msg.author.username}, your balance is ${balance} coins.`);
-  }
-
-  // !g roulette <red|black|odd|even> <amount>
-  if (sub === "roulette") {
-    const choice = args[2]?.toLowerCase();
-    const amount = parseInt(args[3]);
-
-    if (!["red", "black", "odd", "even"].includes(choice))
-      return msg.reply("Choose one of: red, black, odd, even.");
-    if (isNaN(amount) || amount <= 0) return msg.reply("Enter a valid bet amount.");
-    if (amount > balance) return msg.reply("You don't have enough coins.");
-
-    const spin = Math.floor(Math.random() * 37); // 0–36
-    const isRed = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36].includes(spin);
-    const color = spin === 0 ? "green" : isRed ? "red" : "black";
-    const parity = spin === 0 ? "none" : spin % 2 === 0 ? "even" : "odd";
-
-    let win = false;
-    if (choice === color || choice === parity) win = true;
-
-    if (win) {
-      balance += amount;
-      msg.reply(`The wheel landed on **${color} ${spin}** — you **won**! Balance: ${balance}`);
-    } else {
-      balance -= amount;
-      msg.reply(`The wheel landed on **${color} ${spin}** — you **lost**. Balance: ${balance}`);
+  try {
+    if (command === "balance") {
+      const balance = await getUserBalance(msg.author.id);
+      return msg.reply(`${msg.author.username}, your balance is **${balance}** coins.`);
     }
 
-    await userRef.set({ balance }, { merge: true });
-    return;
-  }
+    if (command === "roulette") {
+      const choice = args[2]?.toLowerCase();
+      const amount = parseInt(args[3]);
 
-  // Fallback
-  msg.reply("Invalid command. Type `/help` for usage.");
+      if (!["red", "black", "odd", "even"].includes(choice))
+        return msg.reply("Usage: `!g roulette <red|black|odd|even> <amount>`");
+      if (isNaN(amount) || amount <= 0) return msg.reply("Enter a valid bet amount.");
+
+      let balance = await getUserBalance(msg.author.id);
+      if (amount > balance) return msg.reply("You don't have enough coins.");
+
+      const spin = Math.floor(Math.random() * 37); // 0–36
+      const redNumbers = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+      const color = spin === 0 ? "green" : redNumbers.includes(spin) ? "red" : "black";
+      const parity = spin === 0 ? "none" : spin % 2 === 0 ? "even" : "odd";
+
+      const win = choice === color || choice === parity;
+      balance += win ? amount : -amount;
+      await setUserBalance(msg.author.id, balance);
+
+      msg.reply(
+        `🎯 The wheel landed on **${color} ${spin}** — you ${win ? "**won**" : "**lost**"}!\nNew balance: **${balance}**`
+      );
+      return;
+    }
+
+    msg.reply("Invalid command. Type `/help` for usage.");
+  } catch (err) {
+    console.error("Message handling error:", err);
+    msg.reply("Something went wrong while processing your command.");
+  }
+});
+
+client.once("ready", () => {
+  console.log(`Bot logged in as ${client.user.tag}`);
 });
 
 client.login(TOKEN);
