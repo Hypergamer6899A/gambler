@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from "discord.js";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import express from "express";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -30,7 +31,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-// Register /help slash command
+// Register /help command
 const commands = [
   new SlashCommandBuilder().setName("help").setDescription("Show available commands and rules").toJSON(),
 ];
@@ -80,7 +81,7 @@ async function setUserBalance(userId, balance) {
   await ref.set({ balance }, { merge: true });
 }
 
-// Handle text-based gambling
+// Handle gambling commands
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
   if (msg.channel.id !== CHANNEL_ID) return;
@@ -92,7 +93,7 @@ client.on("messageCreate", async (msg) => {
   try {
     if (command === "balance") {
       const balance = await getUserBalance(msg.author.id);
-      return msg.reply(`${msg.author.username}, your balance is **${balance}** coins.`);
+      return msg.reply(`<@${msg.author.id}>, your balance is **${balance}**.`);
     }
 
     if (command === "roulette") {
@@ -104,7 +105,7 @@ client.on("messageCreate", async (msg) => {
       if (isNaN(amount) || amount <= 0) return msg.reply("Enter a valid bet amount.");
 
       let balance = await getUserBalance(msg.author.id);
-      if (amount > balance) return msg.reply("You don't have enough coins.");
+      if (amount > balance) return msg.reply("You don't have enough money.");
 
       const spin = Math.floor(Math.random() * 37); // 0–36
       const redNumbers = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
@@ -116,7 +117,7 @@ client.on("messageCreate", async (msg) => {
       await setUserBalance(msg.author.id, balance);
 
       msg.reply(
-        `🎯 The wheel landed on **${color} ${spin}** — you ${win ? "**won**" : "**lost**"}!\nNew balance: **${balance}**`
+        `<@${msg.author.id}> The wheel landed on **${color} ${spin}** — you ${win ? "**won**" : "**lost**"}!\nNew balance: **${balance}**`
       );
       return;
     }
@@ -133,3 +134,9 @@ client.once("ready", () => {
 });
 
 client.login(TOKEN);
+
+// Dummy web server (required by Render)
+const app = express();
+app.get("/", (req, res) => res.send("Bot is running."));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
